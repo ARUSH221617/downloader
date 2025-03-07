@@ -47,13 +47,21 @@ class PlatformDownloader:
 
     def download_youtube(self, url: str) -> DownloadResult:
         try:
-            # Add age restriction bypass and custom headers
+            # Configure YouTube with custom options
             yt = pytube.YouTube(
                 url,
-                use_oauth=True,
-                allow_oauth_cache=True,
-                on_progress_callback=None
+                # Disable OAuth temporarily as it's causing issues
+                use_oauth=False,
+                allow_oauth_cache=False
             )
+            
+            # Add custom headers to mimic browser request
+            yt.headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+            }
             
             # Get available streams and select the best quality
             streams = yt.streams.filter(progressive=True, file_extension='mp4')
@@ -100,7 +108,7 @@ class PlatformDownloader:
             if "403" in error_message:
                 return DownloadResult(
                     success=False,
-                    message="Access denied. This might be due to age restriction or regional blocking"
+                    message="Access denied. Please try again in a few minutes."
                 )
             return DownloadResult(
                 success=False,
