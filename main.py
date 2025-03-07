@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from typing import Optional, Callable
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
+import json
+from datetime import datetime
+from pathlib import Path
 
 # Load environment variables from .env file
 load_dotenv()
@@ -274,44 +277,275 @@ class PlatformDownloader:
         except Exception as e:
             return DownloadResult(success=False, message=f"Lottie download failed: {str(e)}")
 
+    def get_platform_handlers(self):
+        return self.platform_handlers
+
+class DownloadHistory:
+    def __init__(self, history_file: str = "download_history.json"):
+        self.history_file = history_file
+        self.history = self._load_history()
+
+    def _load_history(self) -> list:
+        try:
+            with open(self.history_file, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_history(self):
+        with open(self.history_file, 'w') as f:
+            json.dump(self.history, f, indent=2)
+
+    def add_entry(self, url: str, platform: str, result: DownloadResult):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "url": url,
+            "platform": platform,
+            "success": result.success,
+            "message": result.message,
+            "data": result.data
+        }
+        self.history.insert(0, entry)  # Add to beginning of list
+        self._save_history()
+
+    def get_history(self, limit: int = None) -> list:
+        return self.history[:limit] if limit else self.history
+
+    def clear_history(self):
+        self.history = []
+        self._save_history()
+
 def main():
     st.set_page_config(
         page_title="Multi-Platform Downloader",
         page_icon="🌐",
-        layout="centered"
+        layout="wide"  # Changed to wide layout to accommodate history
     )
 
-    st.title("🌐 Multi-Platform Downloader")
-    
-    # Add supported platforms info
-    st.sidebar.title("Supported Platforms")
-    platforms = ["YouTube", "Instagram", "TikTok", "Freepik", "Dribbble", "Spotify", "LottieFiles"]
-    for platform in platforms:
-        st.sidebar.markdown(f"- {platform}")
+    # Initialize download history
+    history_manager = DownloadHistory()
 
-    url = st.text_input("Paste URL Here:", help="Enter the URL of the content you want to download")
-    
-    if st.button("Download", type="primary"):
-        if not url:
-            st.error("Please enter a URL")
-            return
+    # Create two columns: main content and history
+    col1, col2 = st.columns([2, 1])
 
-        downloader = PlatformDownloader()
-        handler = downloader.get_handler(url)
+    with col1:
+        st.title("🌐 Multi-Platform Downloader")
+        
+        url = st.text_input("Paste URL Here:", help="Enter the URL of the content you want to download")
+        
+        # Advanced Options Section in Sidebar
+        st.sidebar.title("Supported Platforms")
+        platforms = ["YouTube", "Instagram", "TikTok", "Freepik", "Dribbble", "Spotify", "LottieFiles"]
+        for platform in platforms:
+            st.sidebar.markdown(f"- {platform}")
 
-        if not handler:
-            st.error("Unsupported platform or invalid URL")
-            return
-
-        with st.spinner("Processing..."):
-            result = handler(url)
+        st.sidebar.title("Advanced Options")
+        show_advanced = st.sidebar.checkbox("Show Advanced Options")
+        
+        advanced_options = {}
+        if show_advanced:
+            st.sidebar.subheader("YouTube Options")
+            advanced_options["youtube"] = {
+                "quality": st.sidebar.selectbox(
+                    "Video Quality",
+                    ["highest", "720p", "480p", "360p", "lowest"]
+                ),
+                "format": st.sidebar.selectbox(
+                    "Format",
+                    ["mp4", "webm"]
+                ),
+                "audio_only": st.sidebar.checkbox("Audio Only (MP3)"),
+                "include_playlist": st.sidebar.checkbox("Download Playlist (if URL is playlist)")
+            }
             
-            if result.success:
-                st.success(result.message)
-                if result.data:
-                    st.json(result.data)
-            else:
-                st.error(result.message)
+            st.sidebar.subheader("Instagram Options")
+            advanced_options["instagram"] = {
+                "download_comments": st.sidebar.checkbox("Download Comments"),
+                "download_geotags": st.sidebar.checkbox("Download Geotags"),
+                "download_metadata": st.sidebar.checkbox("Download Metadata")
+            }
+            
+            st.sidebar.subheader("General Options")
+            advanced_options["general"] = {
+                "custom_path": st.sidebar.text_input("Custom Download Path", "downloads"),
+                "create_subfolders": st.sidebar.checkbox("Create Platform-specific Subfolders", True),
+                "skip_existing": st.sidebar.checkbox("Skip Existing Files", True)
+            }
+
+        if st.button("Download", type="primary"):
+            if not url:
+                st.error("Please enter a URL")
+                return
+
+            downloader = PlatformDownloader()
+            handler = downloader.get_handler(url)
+
+            if not handler:
+                st.error("Unsupported platform or invalid URL")
+                return
+
+            with st.spinner("Processing..."):
+                # Apply advanced options if enabled
+                if show_advanced:
+                    result = process_with_advanced_options(handler, url, advanced_options)
+                else:
+                    result = handler(url)
+                
+                # Add to history
+                platform = get_platform_from_url(url)
+                history_manager.add_entry(url, platform, result)
+                
+                if result.success:
+                    st.success(result.message)
+                    if result.data:
+                        st.json(result.data)
+                else:
+                    st.error(result.message)
+
+    # History Column
+    with col2:
+        st.title("Download History")
+        
+        # Add history controls
+        col2_1, col2_2 = st.columns(2)
+        with col2_1:
+            history_limit = st.number_input("Show last N entries", min_value=1, value=10)
+        with col2_2:
+            if st.button("Clear History"):
+                history_manager.clear_history()
+                st.rerun()
+
+        # Display history
+        history = history_manager.get_history(limit=history_limit)
+        if not history:
+            st.info("No download history available")
+        else:
+            for entry in history:
+                with st.expander(f"{entry['platform']} - {datetime.fromisoformat(entry['timestamp']).strftime('%Y-%m-%d %H:%M')}"):
+                    st.write(f"URL: {entry['url']}")
+                    st.write(f"Status: {'✅ Success' if entry['success'] else '❌ Failed'}")
+                    st.write(f"Message: {entry['message']}")
+                    if entry['data']:
+                        st.json(entry['data'])
+
+def process_with_advanced_options(handler, url: str, options: dict) -> DownloadResult:
+    """Process download with advanced options."""
+    # Create custom download path if specified
+    custom_path = options["general"]["custom_path"]
+    os.makedirs(custom_path, exist_ok=True)
+    
+    # Determine the platform from the URL
+    domain = urlparse(url).netloc.lower()
+    
+    # Create platform-specific subfolder if enabled
+    if options["general"]["create_subfolders"]:
+        for platform_domains in PlatformDownloader.platform_handlers.keys():
+            if any(domain in platform_domain for platform_domain in platform_domains):
+                platform_name = platform_domains[0].split('.')[0]
+                custom_path = os.path.join(custom_path, platform_name)
+                os.makedirs(custom_path, exist_ok=True)
+                break
+    
+    # Handle YouTube-specific options
+    if "youtube.com" in domain or "youtu.be" in domain:
+        if options["youtube"]["audio_only"]:
+            return download_youtube_audio(url, custom_path)
+        else:
+            return download_youtube_video(
+                url, 
+                custom_path,
+                quality=options["youtube"]["quality"],
+                format=options["youtube"]["format"]
+            )
+    
+    # Handle Instagram-specific options
+    elif "instagram.com" in domain:
+        return download_instagram_with_options(
+            url,
+            custom_path,
+            download_comments=options["instagram"]["download_comments"],
+            download_geotags=options["instagram"]["download_geotags"],
+            download_metadata=options["instagram"]["download_metadata"]
+        )
+    
+    # For other platforms, just pass the custom path
+    return handler(url, custom_path)
+
+def download_youtube_video(url: str, output_path: str, quality: str, format: str) -> DownloadResult:
+    try:
+        yt = pytube.YouTube(url, use_oauth=False, allow_oauth_cache=False)
+        
+        # Select stream based on quality preference
+        if quality == "highest":
+            stream = yt.streams.filter(progressive=True, file_extension=format).get_highest_resolution()
+        elif quality == "lowest":
+            stream = yt.streams.filter(progressive=True, file_extension=format).get_lowest_resolution()
+        else:
+            stream = yt.streams.filter(progressive=True, file_extension=format, resolution=quality).first()
+            
+        if not stream:
+            return DownloadResult(success=False, message=f"No stream available for quality: {quality}")
+            
+        filename = stream.default_filename
+        stream.download(output_path=output_path)
+        
+        return DownloadResult(
+            success=True,
+            message=f"Downloaded: {filename}",
+            data={
+                "filename": filename,
+                "title": yt.title,
+                "quality": stream.resolution,
+                "path": os.path.join(output_path, filename)
+            }
+        )
+    except Exception as e:
+        return DownloadResult(success=False, message=f"Download failed: {str(e)}")
+
+def download_youtube_audio(url: str, output_path: str) -> DownloadResult:
+    try:
+        yt = pytube.YouTube(url, use_oauth=False, allow_oauth_cache=False)
+        stream = yt.streams.filter(only_audio=True).first()
+        
+        if not stream:
+            return DownloadResult(success=False, message="No audio stream available")
+            
+        # Download audio and convert to MP3
+        audio_file = stream.download(output_path=output_path)
+        base, _ = os.path.splitext(audio_file)
+        mp3_file = base + '.mp3'
+        os.rename(audio_file, mp3_file)
+        
+        return DownloadResult(
+            success=True,
+            message=f"Downloaded audio: {os.path.basename(mp3_file)}",
+            data={
+                "filename": os.path.basename(mp3_file),
+                "title": yt.title,
+                "path": mp3_file
+            }
+        )
+    except Exception as e:
+        return DownloadResult(success=False, message=f"Audio download failed: {str(e)}")
+
+def get_platform_from_url(url: str) -> str:
+    """Extract platform name from URL."""
+    domain = urlparse(url).netloc.lower()
+    if "youtube" in domain or "youtu.be" in domain:
+        return "YouTube"
+    elif "instagram" in domain:
+        return "Instagram"
+    elif "tiktok" in domain:
+        return "TikTok"
+    elif "freepik" in domain:
+        return "Freepik"
+    elif "dribbble" in domain:
+        return "Dribbble"
+    elif "spotify" in domain:
+        return "Spotify"
+    elif "lottiefiles" in domain:
+        return "LottieFiles"
+    return "Unknown"
 
 if __name__ == "__main__":
     main()
