@@ -1,5 +1,5 @@
+pytube>=15.0.0
 streamlit
-pytube
 instaloader
 requests
 beautifulsoup4

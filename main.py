@@ -47,16 +47,65 @@ class PlatformDownloader:
 
     def download_youtube(self, url: str) -> DownloadResult:
         try:
-            yt = pytube.YouTube(url)
-            stream = yt.streams.get_highest_resolution()
-            stream.download()
+            # Add age restriction bypass and custom headers
+            yt = pytube.YouTube(
+                url,
+                use_oauth=True,
+                allow_oauth_cache=True,
+                on_progress_callback=None
+            )
+            
+            # Get available streams and select the best quality
+            streams = yt.streams.filter(progressive=True, file_extension='mp4')
+            if not streams:
+                return DownloadResult(
+                    success=False,
+                    message="No suitable video streams found"
+                )
+            
+            # Get the highest quality stream
+            stream = streams.get_highest_resolution()
+            
+            # Create downloads directory if it doesn't exist
+            os.makedirs('downloads', exist_ok=True)
+            
+            # Download to the downloads directory
+            filename = stream.default_filename
+            stream.download(output_path='downloads')
+            
             return DownloadResult(
                 success=True,
-                message=f"Downloaded: {stream.default_filename}",
-                data={"filename": stream.default_filename}
+                message=f"Downloaded: {filename}",
+                data={
+                    "filename": filename,
+                    "title": yt.title,
+                    "author": yt.author,
+                    "length": yt.length,
+                    "views": yt.views,
+                    "path": os.path.join('downloads', filename)
+                }
+            )
+        except pytube.exceptions.VideoUnavailable:
+            return DownloadResult(
+                success=False,
+                message="Video is unavailable (possibly private or deleted)"
+            )
+        except pytube.exceptions.RegexMatchError:
+            return DownloadResult(
+                success=False,
+                message="Invalid YouTube URL"
             )
         except Exception as e:
-            return DownloadResult(success=False, message=f"YouTube download failed: {str(e)}")
+            error_message = str(e)
+            if "403" in error_message:
+                return DownloadResult(
+                    success=False,
+                    message="Access denied. This might be due to age restriction or regional blocking"
+                )
+            return DownloadResult(
+                success=False,
+                message=f"YouTube download failed: {error_message}"
+            )
 
     def download_instagram(self, url: str) -> DownloadResult:
         try:
