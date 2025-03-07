@@ -2,6 +2,10 @@ import os
 from dataclasses import dataclass
 from typing import Optional, Callable
 from urllib.parse import urlparse, parse_qs
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import streamlit as st
 import pytube
@@ -19,11 +23,34 @@ class DownloadResult:
 
 class PlatformDownloader:
     def __init__(self):
-        self.insta_loader = instaloader.Instaloader()
+        # Initialize Instagram loader
+        self.insta_loader = instaloader.Instaloader(
+            sleep=True,
+            quiet=False,
+            download_videos=True,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=True
+        )
+        
+        # Load Instagram credentials from .env
+        insta_username = os.getenv("INSTAGRAM_USERNAME")
+        insta_password = os.getenv("INSTAGRAM_PASSWORD")
+        
+        if insta_username and insta_password:
+            try:
+                self.insta_loader.login(insta_username, insta_password)
+                print("Successfully logged in to Instagram")
+            except Exception as e:
+                print(f"Instagram login failed: {e}")
+        else:
+            print("Instagram credentials not found in .env file")
+        
+        # Initialize Spotify client with credentials from .env
         self.spotify_client = spotipy.Spotify(
             auth_manager=SpotifyClientCredentials(
-                client_id=os.getenv("SPOTIPY_CLIENT_ID", "your_spotify_client_id"),
-                client_secret=os.getenv("SPOTIPY_CLIENT_SECRET", "your_spotify_client_secret")
+                client_id=os.getenv("SPOTIPY_CLIENT_ID"),
+                client_secret=os.getenv("SPOTIPY_CLIENT_SECRET")
             )
         )
         
@@ -117,16 +144,69 @@ class PlatformDownloader:
 
     def download_instagram(self, url: str) -> DownloadResult:
         try:
-            shortcode = url.split("/")[-2]
+            # Configure session with proper headers
+            self.insta_loader.context.headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+            }
+            
+            # Add delay to avoid rate limiting
+            self.insta_loader.sleep = True
+            self.insta_loader.quiet = False
+            
+            # Extract post ID from URL
+            if "/reel/" in url:
+                shortcode = url.split("/reel/")[1].split("/")[0]
+            else:
+                shortcode = url.split("/p/")[1].split("/")[0]
+            
+            # Create downloads directory
+            os.makedirs('downloads', exist_ok=True)
+            
+            # Download the post
             post = instaloader.Post.from_shortcode(self.insta_loader.context, shortcode)
             self.insta_loader.download_post(post, target='downloads')
+            
             return DownloadResult(
                 success=True,
                 message=f"Downloaded Instagram post to downloads folder",
-                data={"post_url": post.url}
+                data={
+                    "post_url": post.url,
+                    "caption": post.caption if post.caption else "No caption",
+                    "date": post.date_local.isoformat(),
+                    "is_video": post.is_video,
+                    "likes": post.likes,
+                    "comments": post.comments
+                }
+            )
+        except instaloader.exceptions.InstaloaderException as e:
+            if "429" in str(e):
+                return DownloadResult(
+                    success=False,
+                    message="Rate limited. Please wait a few minutes before trying again."
+                )
+            elif "401" in str(e):
+                return DownloadResult(
+                    success=False,
+                    message="Authentication required. Please log in to Instagram first."
+                )
+            elif "404" in str(e):
+                return DownloadResult(
+                    success=False,
+                    message="Post not found. Please check the URL."
+                )
+            return DownloadResult(
+                success=False,
+                message=f"Instagram download failed: {str(e)}"
             )
         except Exception as e:
-            return DownloadResult(success=False, message=f"Instagram download failed: {str(e)}")
+            return DownloadResult(
+                success=False,
+                message=f"Instagram download failed: {str(e)}"
+            )
 
     def download_tiktok(self, url: str) -> DownloadResult:
         try:
