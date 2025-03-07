@@ -1,0 +1,6 @@
+streamlit
+pytube
+instaloader
+requests
+beautifulsoup4
+spotipy
